@@ -13,6 +13,7 @@ my $pwd=cwd();
 my $project=$ARGV[0];
 my $taxreq=$ARGV[1];	#-- Invoke it with a name of taxon to get just functions for that taxon
 
+$project=~s/\/$//;
 do "$project/SqueezeMeta_conf.pl";
 
 
@@ -119,7 +120,7 @@ if(!$nocog) {
 	#-- Reading coverages for all genes
 
 print "Reading coverage in $coveragefile\n";
-open(infile6,$coveragefile) || die;
+open(infile6,$coveragefile) || warn "Cannot open coverages in $coveragefile\n";
 while(<infile6>) {
 	chomp;
 	next if(!$_ || ($_=~/^\#/));

@@ -18,7 +18,7 @@ do "$project/SqueezeMeta_conf.pl";
 	#-- Configuration variables from conf file
 
 our($datapath,$bowtieref,$bowtie2_build_soft,$contigsfna,$mappingfile,$mode,$resultpath,$rpkmfile,$contigcov,$coveragefile,$bowtie2_x_soft,
-    $mapper, $bwa_soft, $minimap2_soft, $gff_file,$tempdir,$numthreads,$scriptdir,$bedtools_soft);
+    $mapper, $counter, $bwa_soft, $featurecounts_soft, $minimap2_soft, $gff_file,$tempdir,$numthreads,$scriptdir,$bedtools_soft);
 
 my $keepsam=1;  #-- Set to one, it keeps SAM files. Set to zero, it deletes them when no longer needed
 
@@ -26,7 +26,6 @@ my $fastqdir="$datapath/raw_fastq";
 my $samdir="$datapath/sam";
 
 if(-d $samdir) {} else { system("mkdir $samdir"); }
-
  
 	#-- Read the sample's file names
 
@@ -47,6 +46,7 @@ my @f=keys %allsamples;
 my $numsamples=$#f+1;
 my $nums;
 print "Metagenomes found: $numsamples\n";
+print "MAPPER: $mapper\nCOUNTER: $counter\n";
 
 
         #-- Creates Bowtie2 or BWA reference for mapping (index the contigs)
@@ -112,7 +112,7 @@ foreach my $thissample(keys %allsamples) {
 		}
 	print "  Getting raw reads\n";
 	print "$command\n";
-	system $command;
+	system $command; 
 	
 	#-- Now we start mapping reads against contigs
 	
@@ -125,7 +125,7 @@ foreach my $thissample(keys %allsamples) {
     	    if(-e "$tempdir/$par2name") { $command="$bowtie2_x_soft -x $bowtieref $formatoption -1 $tempdir/$par1name -2 $tempdir/$par2name --quiet -p $numthreads -S $outsam"; }
 	    else { $command="$bowtie2_x_soft -x $bowtieref $formatoption -U $tempdir/$par1name --quiet -p $numthreads -S $outsam"; } }
         elsif($mapper eq "bwa") {
-            #Apparently bwa works seemlesly with fasta files as imput.
+            #Apparently bwa works seemlesly with fasta files as input.
             if(-e "$tempdir/$par2name") { $command="$bwa_soft mem $bowtieref $tempdir/$par1name $tempdir/$par2name -v 1 -t $numthreads > $outsam"; }
             else { $command="$bwa_soft mem $bowtieref $tempdir/$par1name -v 1 -t $numthreads > $outsam"; } }
         elsif($mapper eq "minimap2-ont") {
@@ -143,14 +143,19 @@ foreach my $thissample(keys %allsamples) {
 
                                   
 	print "$command\n";
-	system $command;
+	if(-e $outsam) { } else { system $command; }
+
+	#-- Calculating contig coverage/RPKM
+
+	my $totalreads=contigcov($thissample,$outsam);
 	
-	#-- And then we call bedtools for counting
+	#-- And then we call the counting
 	
 	# htseq();
-	system("rm $tempdir/$par1name $tempdir/$par2name");   #-- Delete unnecessary files
-	bedtools($thissample,$outsam);
-	contigcov($thissample,$outsam);
+	 system("rm $tempdir/$par1name $tempdir/$par2name");   #-- Delete unnecessary files
+	if($counter=~/bedtools/i) { bedtools($thissample,$outsam,$totalreads); }
+	elsif($counter=~/featurecounts/i) {  featurecounts($thissample,$outsam,$totalreads);  }
+	else { die "Unknown counter $counter\n"; }
 }
 close outfile1;
 system("rm $samdir/current.sam");   
@@ -167,11 +172,35 @@ system("rm $samdir/current.sam");
 #	system $command;
 #}
 
+#----------------- FeatureCounts counting 
+
+sub featurecounts {
+	print "  Counting with FeatureCounts\n";
+	my($thissample,$outsam,$totalreads)=@_;
+	# print "**$thissample**$outsam**\n";
+	my $command="$featurecounts_soft -a $gff_file -o $tempdir/$project.$thissample.current.fcounts -T $numthreads -t CDS -g ID  -R CORE --Rpath $tempdir $outsam";
+	print "    Counting reads and bases: $command\n";
+	system $command;	
+	
+	#-- Run RPKM calculation (rpkm.pl)
+	
+	$command="perl $scriptdir/09.rpkm.pl $tempdir/$project.$thissample.current.fcounts $gff_file $thissample $totalreads >> $rpkmfile";
+	print "  Calculating RPKM from FeatureCounts: $command\n";
+	system $command;
+
+	#-- Run coverage calculation (coverage.pl)  NOT WORKING FOR FEATURE COUNTS	
+
+	#print "  Calculating Coverage from FeatureCounts\n";
+	#$command="perl $scriptdir/09.coverage.pl $tempdir/$project.$thissample.currentperbase.bedcount $gff_file $thissample >> $coveragefile";
+	# system $command;
+	
+}
+
 #----------------- bedtools counting 
 
 sub bedtools {
 	print "  Counting with Bedtools\n";
-	my($thissample,$outsam)=@_;
+	my($thissample,$outsam,$totalreads)=@_;
 
 	#-- Creating reference for bedtools from the gff file
 	#-- Reference has the format: <contig_id> <gen init pos> <gen end pos> <gen ID>
@@ -239,7 +268,7 @@ sub bedtools {
 	#-- Run RPKM calculation (rpkm.pl)
 	
 	print "  Calculating RPKM from Bedtools\n";
-	$command="perl $scriptdir/09.rpkm.pl $tempdir/$project.$thissample.current.bedcount $gff_file $thissample >> $rpkmfile";
+	$command="perl $scriptdir/09.rpkm.pl $tempdir/$project.$thissample.current.bedcount $gff_file $thissample $totalreads >> $rpkmfile";
 	system $command;
 
 	#-- Run coverage calculation (coverage.pl)	
@@ -314,5 +343,6 @@ sub contigcov {
 		else { printf outfile4 "$rc\t%.3f\t%.3f\t$longt\t$readcount{$rc}{reads}\t$readcount{$rc}{lon}\t$thissample\n",$coverage,$rpkm; }
 		}
 	close outfile4;	
+	return $totalreadcount;
 }
 
